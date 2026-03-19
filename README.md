@@ -1,5 +1,7 @@
 # gacli
 
+[日本語](./README.ja.md)
+
 Simple Google Analytics 4 CLI with multi-profile support. No gcloud required.
 
 ## Install
