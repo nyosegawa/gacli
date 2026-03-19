@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from google.analytics.data_v1beta import BetaAnalyticsDataClient
 from google.analytics.data_v1beta.types import (
     DateRange,
     Dimension,
+    Filter,
+    FilterExpression,
     Metric,
     RunRealtimeReportRequest,
     RunReportRequest,
@@ -36,21 +38,46 @@ def run_realtime_report(
     return _parse_response(response, metrics, dimensions or [])
 
 
+def _build_hour_filter(hours: int) -> tuple[date, FilterExpression]:
+    """Return (start_date, dimension_filter) for the last N hours."""
+    now = datetime.now()
+    hour_values = []
+    for i in range(hours):
+        dt = now - timedelta(hours=i)
+        hour_values.append(dt.strftime("%Y%m%d%H"))
+
+    start_date = (now - timedelta(hours=hours - 1)).date()
+
+    dimension_filter = FilterExpression(
+        filter=Filter(
+            field_name="dateHour",
+            in_list_filter=Filter.InListFilter(values=hour_values),
+        ),
+    )
+    return start_date, dimension_filter
+
+
 def run_report(
     credentials: Credentials,
     property_id: str,
     metrics: list[str] | None = None,
     dimensions: list[str] | None = None,
     days: int = 7,
+    hours: int | None = None,
 ) -> dict:
     client = get_client(credentials)
     if metrics is None:
         metrics = ["screenPageViews", "activeUsers", "sessions"]
     if dimensions is None:
-        dimensions = ["date"]
+        dimensions = ["dateHour"] if hours else ["date"]
 
-    end_date = date.today()
-    start_date = end_date - timedelta(days=days - 1)
+    dimension_filter = None
+    if hours is not None:
+        start_date, dimension_filter = _build_hour_filter(hours)
+        end_date = date.today()
+    else:
+        end_date = date.today()
+        start_date = end_date - timedelta(days=days - 1)
 
     request = RunReportRequest(
         property=f"properties/{property_id}",
@@ -62,6 +89,7 @@ def run_report(
         ],
         metrics=[Metric(name=m) for m in metrics],
         dimensions=[Dimension(name=d) for d in dimensions],
+        dimension_filter=dimension_filter,
     )
     response = client.run_report(request)
     return _parse_response(response, metrics, dimensions)
@@ -72,13 +100,19 @@ def run_pages_report(
     property_id: str,
     days: int = 7,
     limit: int = 10,
+    hours: int | None = None,
 ) -> dict:
     client = get_client(credentials)
     metrics = ["screenPageViews", "activeUsers"]
     dimensions = ["pagePath"]
 
-    end_date = date.today()
-    start_date = end_date - timedelta(days=days - 1)
+    dimension_filter = None
+    if hours is not None:
+        start_date, dimension_filter = _build_hour_filter(hours)
+        end_date = date.today()
+    else:
+        end_date = date.today()
+        start_date = end_date - timedelta(days=days - 1)
 
     request = RunReportRequest(
         property=f"properties/{property_id}",
@@ -97,6 +131,7 @@ def run_pages_report(
                 "desc": True,
             }
         ],
+        dimension_filter=dimension_filter,
     )
     response = client.run_report(request)
     return _parse_response(response, metrics, dimensions)

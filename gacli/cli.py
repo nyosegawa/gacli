@@ -226,27 +226,38 @@ def realtime(ctx: click.Context) -> None:
 
 @main.command()
 @click.option("--days", "-d", default=7, help="Number of days (default: 7)")
+@click.option("--hours", default=None, type=int, help="Last N hours (overrides --days)")
 @click.pass_context
-def summary(ctx: click.Context, days: int) -> None:
+def summary(ctx: click.Context, days: int, hours: int | None) -> None:
     """Show daily summary (PV, users, sessions)."""
     pid = require_property_id(ctx)
     creds = require_credentials(ctx.obj["profile"])
-    data = run_report(creds, pid, days=days)
+    data = run_report(creds, pid, days=days, hours=hours)
 
     if is_json_mode(ctx):
         output_json(data)
         return
 
-    table = Table(title=f"Summary (last {days} days)")
-    table.add_column("Date", style="cyan")
+    if hours is not None:
+        title = f"Summary (last {hours} hours)"
+        time_dim = "dateHour"
+    else:
+        title = f"Summary (last {days} days)"
+        time_dim = "date"
+
+    table = Table(title=title)
+    table.add_column("Hour" if hours else "Date", style="cyan")
     table.add_column("Page Views", style="green", justify="right")
     table.add_column("Users", style="yellow", justify="right")
     table.add_column("Sessions", style="magenta", justify="right")
 
-    rows = sorted(data["rows"], key=lambda r: r["date"])
+    rows = sorted(data["rows"], key=lambda r: r[time_dim])
     for row in rows:
-        d = row["date"]
-        formatted = f"{d[:4]}-{d[4:6]}-{d[6:]}"
+        d = row[time_dim]
+        if hours:
+            formatted = f"{d[:4]}-{d[4:6]}-{d[6:8]} {d[8:]}:00"
+        else:
+            formatted = f"{d[:4]}-{d[4:6]}-{d[6:]}"
         table.add_row(
             formatted,
             row["screenPageViews"],
@@ -263,19 +274,25 @@ def summary(ctx: click.Context, days: int) -> None:
 
 @main.command()
 @click.option("--days", "-d", default=7, help="Number of days (default: 7)")
+@click.option("--hours", default=None, type=int, help="Last N hours (overrides --days)")
 @click.option("--limit", "-n", default=10, help="Number of pages (default: 10)")
 @click.pass_context
-def pages(ctx: click.Context, days: int, limit: int) -> None:
+def pages(ctx: click.Context, days: int, hours: int | None, limit: int) -> None:
     """Show top pages by page views."""
     pid = require_property_id(ctx)
     creds = require_credentials(ctx.obj["profile"])
-    data = run_pages_report(creds, pid, days=days, limit=limit)
+    data = run_pages_report(creds, pid, days=days, limit=limit, hours=hours)
 
     if is_json_mode(ctx):
         output_json(data)
         return
 
-    table = Table(title=f"Top {limit} Pages (last {days} days)")
+    if hours is not None:
+        title = f"Top {limit} Pages (last {hours} hours)"
+    else:
+        title = f"Top {limit} Pages (last {days} days)"
+
+    table = Table(title=title)
     table.add_column("#", style="dim", justify="right")
     table.add_column("Page", style="cyan")
     table.add_column("Page Views", style="green", justify="right")

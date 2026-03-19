@@ -5,7 +5,13 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from gacli.client import _parse_response, run_pages_report, run_report, run_realtime_report
+from gacli.client import (
+    _build_hour_filter,
+    _parse_response,
+    run_pages_report,
+    run_report,
+    run_realtime_report,
+)
 
 
 def _make_row(dim_values: list[str], met_values: list[str]):
@@ -115,6 +121,73 @@ class TestRunRealtimeReport:
         assert call_args.property == "properties/123456"
         assert call_args.metrics[0].name == "activeUsers"
         assert result["rows"][0]["country"] == "Japan"
+
+
+class TestBuildHourFilter:
+    def test_returns_correct_number_of_hours(self):
+        start_date, dim_filter = _build_hour_filter(3)
+        values = dim_filter.filter.in_list_filter.values
+        assert len(values) == 3
+
+    def test_hour_values_format(self):
+        _start_date, dim_filter = _build_hour_filter(1)
+        values = dim_filter.filter.in_list_filter.values
+        # dateHour format: YYYYMMDDHH (10 chars)
+        assert len(values[0]) == 10
+
+    def test_field_name_is_dateHour(self):
+        _start_date, dim_filter = _build_hour_filter(1)
+        assert dim_filter.filter.field_name == "dateHour"
+
+
+class TestRunReportHourly:
+    def test_hours_uses_dateHour_dimension(self):
+        mock_creds = MagicMock()
+        mock_client = MagicMock()
+        mock_client.run_report.return_value = SimpleNamespace(
+            rows=[_make_row(["2026031918"], ["10", "5", "6"])],
+            row_count=1,
+        )
+
+        with patch("gacli.client.get_client", return_value=mock_client):
+            result = run_report(mock_creds, "123456", hours=3)
+
+        call_args = mock_client.run_report.call_args[0][0]
+        assert call_args.dimensions[0].name == "dateHour"
+        assert call_args.dimension_filter is not None
+        assert result["dimensions"] == ["dateHour"]
+
+    def test_hours_none_uses_date_dimension(self):
+        mock_creds = MagicMock()
+        mock_client = MagicMock()
+        mock_client.run_report.return_value = SimpleNamespace(
+            rows=[_make_row(["20260319"], ["10", "5", "6"])],
+            row_count=1,
+        )
+
+        with patch("gacli.client.get_client", return_value=mock_client):
+            result = run_report(mock_creds, "123456")
+
+        call_args = mock_client.run_report.call_args[0][0]
+        assert call_args.dimensions[0].name == "date"
+        assert not call_args.dimension_filter
+
+
+class TestRunPagesReportHourly:
+    def test_hours_adds_dimension_filter(self):
+        mock_creds = MagicMock()
+        mock_client = MagicMock()
+        mock_client.run_report.return_value = SimpleNamespace(
+            rows=[_make_row(["/posts/hello/"], ["50", "30"])],
+            row_count=1,
+        )
+
+        with patch("gacli.client.get_client", return_value=mock_client):
+            run_pages_report(mock_creds, "123456", hours=3)
+
+        call_args = mock_client.run_report.call_args[0][0]
+        assert call_args.dimensions[0].name == "pagePath"
+        assert call_args.dimension_filter is not None
 
 
 class TestRunPagesReport:
