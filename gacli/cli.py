@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import click
@@ -57,9 +58,23 @@ def require_property_id(ctx: click.Context) -> str:
     if not pid:
         profile = ctx.obj.get("profile", "default")
         raise click.ClickException(
-            f"Property ID required. Set it with: gacli config -p <ID> --profile {profile}"
+            f"Property ID not set.\n"
+            f"  Why: No property ID configured for profile '{profile}'.\n"
+            f"  Fix: gacli config -p <PROPERTY_ID> --profile {profile}\n"
+            f"  Find your property ID at: Google Analytics > Admin > Property Settings"
         )
     return pid
+
+
+def require_credentials(profile: str):
+    try:
+        return load_credentials(profile)
+    except FileNotFoundError:
+        raise click.ClickException(
+            f"Not authenticated.\n"
+            f"  Why: No credentials found for profile '{profile}'.\n"
+            f"  Fix: gacli auth --profile {profile}"
+        )
 
 
 def list_profiles() -> list[str]:
@@ -67,6 +82,14 @@ def list_profiles() -> list[str]:
     if not profiles_dir.exists():
         return []
     return sorted(d.name for d in profiles_dir.iterdir() if d.is_dir())
+
+
+def output_json(data: dict) -> None:
+    click.echo(json.dumps(data, ensure_ascii=False, indent=2))
+
+
+def is_json_mode(ctx: click.Context) -> bool:
+    return ctx.obj.get("json_output", False) or not sys.stdout.isatty()
 
 
 @click.group()
@@ -80,8 +103,14 @@ def list_profiles() -> list[str]:
     default=None,
     help="GA4 property ID (overrides saved config)",
 )
+@click.option(
+    "--json", "json_output",
+    is_flag=True,
+    default=False,
+    help="Output as JSON (auto-enabled when piped)",
+)
 @click.pass_context
-def main(ctx: click.Context, profile: str | None, property_id: str | None) -> None:
+def main(ctx: click.Context, profile: str | None, property_id: str | None, json_output: bool) -> None:
     """Simple Google Analytics 4 CLI."""
     resolved_profile = profile or get_default_profile()
     config = load_config(resolved_profile)
@@ -89,6 +118,7 @@ def main(ctx: click.Context, profile: str | None, property_id: str | None) -> No
     ctx.ensure_object(dict)
     ctx.obj["profile"] = resolved_profile
     ctx.obj["property_id"] = property_id or config.get("property_id")
+    ctx.obj["json_output"] = json_output
 
 
 @main.command()
@@ -100,8 +130,14 @@ def auth(profile: str | None) -> None:
 
     try:
         authenticate(resolved_profile)
-    except FileNotFoundError as e:
-        raise click.ClickException(str(e))
+    except FileNotFoundError:
+        raise click.ClickException(
+            f"Client secret not found.\n"
+            f"  Why: ~/.config/gacli/client_secret.json does not exist.\n"
+            f"  Fix: Download OAuth client ID JSON from GCP Console and save it as:\n"
+            f"       ~/.config/gacli/client_secret.json\n"
+            f"  See: https://console.cloud.google.com/auth/clients/create"
+        )
 
     console.print(f"[bold green]Done![/bold green] Profile [cyan]{resolved_profile}[/cyan] authenticated.")
 
@@ -168,8 +204,12 @@ def profiles() -> None:
 def realtime(ctx: click.Context) -> None:
     """Show realtime active users."""
     pid = require_property_id(ctx)
-    creds = load_credentials(ctx.obj["profile"])
+    creds = require_credentials(ctx.obj["profile"])
     data = run_realtime_report(creds, pid, dimensions=["country"])
+
+    if is_json_mode(ctx):
+        output_json(data)
+        return
 
     table = Table(title="Realtime Active Users")
     table.add_column("Country", style="cyan")
@@ -190,8 +230,12 @@ def realtime(ctx: click.Context) -> None:
 def summary(ctx: click.Context, days: int) -> None:
     """Show daily summary (PV, users, sessions)."""
     pid = require_property_id(ctx)
-    creds = load_credentials(ctx.obj["profile"])
+    creds = require_credentials(ctx.obj["profile"])
     data = run_report(creds, pid, days=days)
+
+    if is_json_mode(ctx):
+        output_json(data)
+        return
 
     table = Table(title=f"Summary (last {days} days)")
     table.add_column("Date", style="cyan")
@@ -224,8 +268,12 @@ def summary(ctx: click.Context, days: int) -> None:
 def pages(ctx: click.Context, days: int, limit: int) -> None:
     """Show top pages by page views."""
     pid = require_property_id(ctx)
-    creds = load_credentials(ctx.obj["profile"])
+    creds = require_credentials(ctx.obj["profile"])
     data = run_pages_report(creds, pid, days=days, limit=limit)
+
+    if is_json_mode(ctx):
+        output_json(data)
+        return
 
     table = Table(title=f"Top {limit} Pages (last {days} days)")
     table.add_column("#", style="dim", justify="right")

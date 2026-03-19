@@ -46,6 +46,51 @@ gacli pages -n 20      # Top 20 pages
 gacli realtime         # Realtime active users
 ```
 
+### JSON Output
+
+All data commands support `--json` for structured output. JSON mode is auto-enabled when piped.
+
+```bash
+gacli --json summary
+gacli pages | jq '.rows[] | select(.pagePath | contains("/posts/"))'
+```
+
+## Example: Claude Code Agent Skill
+
+gacli ships with a [Claude Code Agent Skill](./skills/google-analytics/SKILL.md). Once linked, you can ask your coding agent about analytics in natural language:
+
+```
+❯ How was today's traffic?
+
+⏺ Skill(google-analytics)
+  ⎿  Successfully loaded skill
+
+⏺ Bash(gacli summary -d 1)
+⏺ Bash(gacli pages -d 1 -n 10)
+⏺ Bash(gacli realtime)
+
+⏺ Today's access summary (3/19):
+
+  | Metric   | Value |
+  |----------|-------|
+  | PV       | 66    |
+  | Users    | 68    |
+  | Sessions | 68    |
+
+  Top pages:
+  1. /posts/docs-in-agent-era/ — 19 PV
+  2. /posts/harness-engineering-best-practices-2026/ — 19 PV
+  3. /posts/japanese-handwriting-ocr-comparison/ — 7 PV
+
+  Realtime: 261 active users (247 from Japan)
+```
+
+To enable:
+
+```bash
+ln -s /path/to/gacli/skills/google-analytics ~/.claude/skills/google-analytics
+```
+
 ## Multi-Profile
 
 Manage multiple sites or Google accounts with profiles.
