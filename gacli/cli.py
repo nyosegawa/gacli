@@ -8,7 +8,7 @@ import click
 from rich.console import Console
 from rich.table import Table
 
-from gacli.client import run_pages_report, run_realtime_report, run_report
+from gacli.client import run_pages_report, run_query_report, run_realtime_report, run_report
 from gacli.oauth import authenticate, credentials_path, load_credentials
 
 console = Console()
@@ -307,3 +307,42 @@ def pages(ctx: click.Context, days: int, hours: int | None, limit: int) -> None:
         )
 
     console.print(table)
+
+
+@main.command()
+@click.option("--metric", "-m", multiple=True, required=True, help="Metric name(s)")
+@click.option("--dimension", "-d", "dims", multiple=True, help="Dimension name(s)")
+@click.option("--days", default=7, help="Number of days (default: 7)")
+@click.option("--hours", default=None, type=int, help="Last N hours (overrides --days)")
+@click.option("--limit", "-n", default=0, help="Max rows (0 = all)")
+@click.option("--sort", default=None, help="Sort: field:desc or field:asc")
+@click.option("--filter", "-f", "filters", multiple=True, help="Filter: 'field op value'")
+@click.option("--realtime", is_flag=True, help="Use realtime API")
+@click.pass_context
+def query(
+    ctx: click.Context,
+    metric: tuple[str, ...],
+    dims: tuple[str, ...],
+    days: int,
+    hours: int | None,
+    limit: int,
+    sort: str | None,
+    filters: tuple[str, ...],
+    realtime: bool,
+) -> None:
+    """Run a custom GA4 query (escape hatch)."""
+    pid = require_property_id(ctx)
+    creds = require_credentials(ctx.obj["profile"])
+    data = run_query_report(
+        creds,
+        pid,
+        metrics=list(metric),
+        dimensions=list(dims),
+        days=days,
+        hours=hours,
+        limit=limit,
+        order_by=sort,
+        filters=list(filters) if filters else None,
+        realtime=realtime,
+    )
+    output_json(data)

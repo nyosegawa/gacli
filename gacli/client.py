@@ -8,6 +8,7 @@ from google.analytics.data_v1beta.types import (
     Dimension,
     Filter,
     FilterExpression,
+    FilterExpressionList,
     Metric,
     RunRealtimeReportRequest,
     RunReportRequest,
@@ -154,3 +155,152 @@ def _parse_response(
         "rows": rows,
         "row_count": response.row_count,
     }
+
+
+# ---------------------------------------------------------------------------
+# Escape-hatch helpers
+# ---------------------------------------------------------------------------
+
+_STRING_OPS = {
+    "contains": Filter.StringFilter.MatchType.CONTAINS,
+    "exact": Filter.StringFilter.MatchType.EXACT,
+    "begins_with": Filter.StringFilter.MatchType.BEGINS_WITH,
+    "ends_with": Filter.StringFilter.MatchType.ENDS_WITH,
+    "regex": Filter.StringFilter.MatchType.FULL_REGEXP,
+}
+
+_NUMERIC_OPS = {
+    ">=": Filter.NumericFilter.Operation.GREATER_THAN_OR_EQUAL,
+    "<=": Filter.NumericFilter.Operation.LESS_THAN_OR_EQUAL,
+    "==": Filter.NumericFilter.Operation.EQUAL,
+    ">": Filter.NumericFilter.Operation.GREATER_THAN,
+    "<": Filter.NumericFilter.Operation.LESS_THAN,
+}
+
+
+def _parse_filter(filter_str: str) -> tuple[FilterExpression, bool]:
+    """Parse ``'field op value'``.  Returns *(expr, is_metric_filter)*.
+
+    String ops  → dimension filter: contains, exact, begins_with, ends_with, regex
+    Numeric ops → metric filter:    >, <, >=, <=, ==
+    """
+    for op in (">=", "<=", "==", ">", "<"):
+        if f" {op} " in filter_str:
+            field, value = filter_str.split(f" {op} ", 1)
+            field, value = field.strip(), value.strip()
+            num_val = (
+                {"double_value": float(value)}
+                if "." in value
+                else {"int64_value": int(value)}
+            )
+            return FilterExpression(
+                filter=Filter(
+                    field_name=field,
+                    numeric_filter=Filter.NumericFilter(
+                        operation=_NUMERIC_OPS[op],
+                        value=num_val,
+                    ),
+                ),
+            ), True
+
+    parts = filter_str.split(None, 2)
+    if len(parts) != 3:
+        raise ValueError(
+            f"Invalid filter: '{filter_str}'. Expected: 'field op value'"
+        )
+    field, op, value = parts
+    if op not in _STRING_OPS:
+        raise ValueError(f"Unknown operator: '{op}'")
+    return FilterExpression(
+        filter=Filter(
+            field_name=field,
+            string_filter=Filter.StringFilter(
+                match_type=_STRING_OPS[op],
+                value=value,
+            ),
+        ),
+    ), False
+
+
+def _combine_expressions(
+    exprs: list[FilterExpression],
+) -> FilterExpression | None:
+    if not exprs:
+        return None
+    if len(exprs) == 1:
+        return exprs[0]
+    return FilterExpression(
+        and_group=FilterExpressionList(expressions=exprs),
+    )
+
+
+def run_query_report(
+    credentials: Credentials,
+    property_id: str,
+    metrics: list[str],
+    dimensions: list[str] | None = None,
+    days: int = 7,
+    hours: int | None = None,
+    limit: int = 0,
+    order_by: str | None = None,
+    filters: list[str] | None = None,
+    realtime: bool = False,
+) -> dict:
+    """Run an arbitrary GA4 query (escape hatch)."""
+    client = get_client(credentials)
+    dimensions = dimensions or []
+
+    dim_exprs: list[FilterExpression] = []
+    met_exprs: list[FilterExpression] = []
+    for f in filters or []:
+        expr, is_metric = _parse_filter(f)
+        (met_exprs if is_metric else dim_exprs).append(expr)
+
+    order_bys = None
+    if order_by:
+        parts = order_by.rsplit(":", 1)
+        field = parts[0]
+        desc = parts[1].lower() != "asc" if len(parts) > 1 else True
+        if field in metrics:
+            order_bys = [{"metric": {"metric_name": field}, "desc": desc}]
+        else:
+            order_bys = [{"dimension": {"dimension_name": field}, "desc": desc}]
+
+    if realtime:
+        request = RunRealtimeReportRequest(
+            property=f"properties/{property_id}",
+            metrics=[Metric(name=m) for m in metrics],
+            dimensions=[Dimension(name=d) for d in dimensions],
+            dimension_filter=_combine_expressions(dim_exprs),
+            metric_filter=_combine_expressions(met_exprs),
+            limit=limit,
+            order_bys=order_bys or [],
+        )
+        response = client.run_realtime_report(request)
+    else:
+        if hours is not None:
+            start_date, hour_filter = _build_hour_filter(hours)
+            dim_exprs.append(hour_filter)
+            end_date = date.today()
+        else:
+            end_date = date.today()
+            start_date = end_date - timedelta(days=days - 1)
+
+        request = RunReportRequest(
+            property=f"properties/{property_id}",
+            date_ranges=[
+                DateRange(
+                    start_date=start_date.isoformat(),
+                    end_date=end_date.isoformat(),
+                )
+            ],
+            metrics=[Metric(name=m) for m in metrics],
+            dimensions=[Dimension(name=d) for d in dimensions],
+            dimension_filter=_combine_expressions(dim_exprs),
+            metric_filter=_combine_expressions(met_exprs),
+            limit=limit,
+            order_bys=order_bys or [],
+        )
+        response = client.run_report(request)
+
+    return _parse_response(response, metrics, dimensions)
